@@ -225,6 +225,97 @@ GameManager does not draw cards directly and apply effects. It calls `POST /worl
 
 Time advancement, round tracking, and initiative steps are all managed via the RE clock endpoint (`GET/PUT /world/clock`). GameManager does not maintain its own time state.
 
+### 5.6 Doors and Keys → RE Prop Entities
+
+Doors are `prop` entities carrying a `door_block`. Keys are `item` entities carrying a `key_block`. Both are first-class RE world state and are created through the standard entity endpoints.
+
+GameManager interacts with doors through the RE action pipeline only — it never mutates `door_block.state` directly. The relevant action verbs are:
+
+| Action verb | Pre-condition | Effect |
+|---|---|---|
+| `open_door` | reachable; `door_block.state == closed` | `closed → open`; emits `door_opened` |
+| `close_door` | reachable; `door_block.state == open` | `open → closed`; emits `door_closed` |
+| `lock_door` | reachable; `closed`; actor holds matching key | `closed → locked`; emits `door_locked` |
+| `unlock_door` | reachable; `locked`; actor holds matching key | `locked → closed`; emits `door_unlocked` |
+| `force_door` | reachable; not `smashed` | `any → smashed`; emits `door_forced` |
+
+**State model:** `open` (passable) → `closed` (blocked) → `locked` (blocked) → `smashed` (passable, terminal until repaired).
+
+The map edge between two nodes carries only a `constraint.door_entity_uuid` reference; the RE validation layer resolves passability from `door_block.state` at runtime. GameManager does not need to track door state separately — it reads the entity block on demand.
+
+**Scene assembly:** When `BattleMapOrchestrator` sets up a map, it creates door entities (`POST /world/entities`) and references them from map edge constraints. Key entities may be placed in NPC inventory blocks or container blocks as part of scene setup.
+
+### 5.7 Portals → RE Prop Entities
+
+Portals are `prop` entities carrying a `portal_block`. They model stairs, ladders, hatches, teleporters, map gates, and any transition that moves an actor between map locations.
+
+Portal state model:
+
+| State | Usable |
+|---|---|
+| `active` | yes |
+| `inactive` | no |
+| `locked` | no — requires unlock action |
+
+The single action verb is `use_portal` (`actor_id`, `target_id` = portal entity UUID).
+
+**Transition contract (RE pipeline):**
+1. Validates portal reachable and `active`; applies encounter movement rules if `clock.round > 0`.
+2. Atomically removes actor presence from source map/node; adds presence at `destination_map_uuid` / `destination_node_uuid`.
+3. Emits `portal_transition_completed` (actor_id, from_map_uuid, from_node_uuid, to_map_uuid, to_node_uuid).
+4. If destination map ≠ active scene map: also emits `scene_transition_requested`.
+
+**GameManager responsibility:** `BattleMapOrchestrator` (and `TravelOrchestrator` for overworld-to-dungeon transitions) monitors `emitted_events` from each action result for `scene_transition_requested`. On receipt, the orchestrator triggers a `scene_transition` phase and loads the destination map as the new scene.
+
+Portal entities are created during scene assembly. Bidirectional pairs must be created together: each portal's `portal_block.return_portal_uuid` references its companion. One-way portals carry `return_portal_uuid: null`.
+
+### 5.8 Containers → RE Item Entities
+
+Containers are `item` entities whose `container_block` holds an ordered list of item entity UUIDs. They share the same entity endpoints as all other items.
+
+Container state:
+
+| State | Accessible |
+|---|---|
+| `open` | yes |
+| `closed` | no — requires `open_container` action |
+| `locked` | no — requires matching key entity |
+
+Relevant action verbs:
+
+| Verb | Effect |
+|---|---|
+| `open_container` | `closed → open` |
+| `close_container` | `open → closed` |
+| `put_in_container` | Moves item from actor's `inventory_block` into `container_block.items` |
+| `take_from_container` | Moves item from `container_block.items` into actor's `inventory_block` |
+| `transfer_item` | Atomic move between two `container_block`s or between a `container_block` and map presence |
+
+The pipeline validates accessibility, key match (if locked), capacity limits, and cycle detection (a container cannot contain itself transitively). **GameManager never constructs containment mutations manually** — all transfers go through action envelopes.
+
+**Map presence rule:** Only the outermost entity in a containment chain has map presence. Items inside a container or inside a character's inventory have no independent presence. When a container moves, all its contents move with it automatically.
+
+**Scene assembly:** Containers and their initial contents are seeded during scene setup by creating entities and calling `put_in_container` system actions (or by using the deck `container_spawn` payload type via `POST /world/decks/{deck_id}/draw`).
+
+### 5.9 Visibility and Fog of War → RE Explored Index
+
+The RE distinguishes three visibility concepts, each with different authority:
+
+| Concept | Authority | RE endpoint |
+|---|---|---|
+| Explored state (fog of war) | **Canonical world resource** — stored, journaled | `GET/PUT/DELETE /world/maps/{map_id}/explored/{faction_id}` |
+| Line of sight | Derived — pure function of positions + terrain | Computed on affordance query; never stored |
+| Current visibility | Derived — explored + LoS | Computed on demand; never stored |
+
+**Explored state** is the only visibility concept GameManager needs to reason about. It is updated automatically by the RE when any faction member enters a new node or tile (journaled mutation). GameManager reads it for:
+- Rendering the fog layer in `UIFlowSnapshot.scene_summary`
+- Filtering affordance suggestions to visible targets
+- Scene setup: pre-revealing areas with `PUT /world/maps/{map_id}/explored/{faction_id}` (scripted revelation)
+
+**GameManager does not implement its own fog cache.** The explored index is authoritative RE world state. On replay, the RE journal reconstructs it identically.
+
+**GM-initiated revelation:** For scripted scenes (cutscenes, map unlocks, teleport-to-known-location), the `BattleMapOrchestrator` may call `PUT /world/maps/{map_id}/explored/{faction_id}` directly during scene setup. This is treated as a configuration operation, identical in kind to placing entities or setting map presence (see §6.3 Invariants).
+
 ---
 
 ## 6. GameManager ↔ RuleEngine Contract
@@ -335,17 +426,30 @@ Scene orchestrators assemble RE resources during `scene_setup` phase, then inter
 
 **Setup (RE resource assembly):**
 - Create or reference spatial map (tile or vector level): `POST /world/maps`
-- Spawn entities (enemies, allies): `POST /world/entities`
+- Spawn entities (enemies, allies, doors, portals, containers): `POST /world/entities`
 - Place entities on map: `PUT /world/maps/{map_id}/presence/{entity_id}` with tile/vector location
 - Create encounter group per side: `POST /world/groups` (`group_type: encounter_group`)
 - Add members to groups with `order_value`: `POST /world/groups/{id}/members`
 - Initialize clock for encounter: `PUT /world/clock` (`round: 1, initiative_step: 1`)
+- Pre-reveal scripted areas (if any): `PUT /world/maps/{map_id}/explored/{faction_id}`
+- Seed container loot: submit `put_in_container` system actions, or draw from a deck carrying `container_spawn` payloads
 - Set scene mode: `PUT /scene` (`mode: battle_map`, resource references)
 
 **Active:**
 - `current_actor_id` derived from encounter group member with current `initiative_step` and `has_acted: false`
 - After each actor action: call `POST /turn/end` to advance clock, tick effects, evaluate events
-- Monitor `emitted_events` from each action result for exit-condition events
+- Monitor `emitted_events` from each action result for:
+  - Exit-condition events (enemies defeated, objectives met, escape achieved)
+  - `scene_transition_requested` — actor used a portal to a different map (see §5.7)
+  - `door_forced` / `door_opened` — narrative hooks or trap triggers
+  - `portal_transition_completed` — update `UIFlowSnapshot` with new actor position
+
+**Portal transition handling:**
+When `scene_transition_requested` is detected in `emitted_events`:
+1. The orchestrator records the destination map UUID and node UUID from the event payload.
+2. `FlowEngine` transitions to `scene_transition` phase.
+3. `BattleMapOrchestrator` (or `TravelOrchestrator` for overworld links) is instantiated for the destination map.
+4. Scene setup proceeds for the destination; the actor's presence on the destination map was already written by the RE pipeline.
 
 **Exit:**
 - Exit conditions evaluated against RE-emitted events (all enemies dead, escape achieved, etc.)
@@ -592,6 +696,11 @@ Every UI request carries `X-Correlation-Id` (generated at gateway if absent). It
 - Battle scene: setup → entity placement → combat turns → exit conditions → XP
 - Save mid-wizard: GM snapshot + RE save; restore both; wizard resumes at correct step
 - Save mid-encounter: restore returns to correct round/initiative state
+- **Door scenario:** door entity created during scene setup; actor blocked by closed door; `open_door` action accepted; actor moves through; `close_door` and `lock_door` verify state transitions; `force_door` bypasses lock
+- **Portal transition:** actor uses staircase portal during theater-of-mind scene; `portal_transition_completed` and `scene_transition_requested` emitted; GM transitions to new scene; actor presence on destination map confirmed; return portal available
+- **Container loot:** container entity seeded with items during setup; actor submits `open_container` then `take_from_container`; items appear in actor inventory; container reflects removal
+- **Fog of war:** explored index empty at scene start; actor moves to new node; RE journals explored index mutation; replay reconstructs identical explored index; `UIFlowSnapshot` reflects visible vs fogged nodes correctly
+- **Portal + save/restore:** save mid-dungeon-floor; restore; actor location on lower floor map; explored index for both floors preserved
 
 ### 14.3 Replay Tests
 

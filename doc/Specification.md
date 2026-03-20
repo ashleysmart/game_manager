@@ -74,16 +74,46 @@ UI
 
 ## 4. Domain Models
 
+### 4.0 Short ID Scheme
+
+Every GM-owned and RE-owned resource carries two identifiers:
+
+| Field | Format | Purpose |
+|---|---|---|
+| `uuid` | RFC 4122 UUID | Canonical internal key, idempotency key, storage FK |
+| `sid` | 8 chars from `[A-Za-z0-9]` | URL-safe short ID — used in all URL path segments |
+
+**Short ID properties:**
+- Generated at resource creation alongside the UUID (CSPRNG-derived, base-62 encoded).
+- Globally unique **per resource type** (sessions, entities, maps, groups, trackers, decks each have their own namespace).
+- Immutable after creation.
+- 62⁸ ≈ 218 trillion — collision probability negligible for expected dataset sizes.
+
+**URL routing:** All GM and RE URL path segments use `{sid}`. Lookup by UUID is supported via a query parameter (`?uuid=<uuid>`) for tooling and migration. The canonical URL always uses the `sid`.
+
+**Example:**
+```
+Full UUID:  /v1/sessions/550e8400-e29b-41d4-a716-446655440000/flow
+Short ID:   /v1/sessions/aB3kR7mX/flow
+```
+
+The short ID is included in every resource response alongside the UUID so clients can construct short URLs immediately.
+
+---
+
 ### 4.1 CampaignRuntimeState
 
-Manager-layer state. Does not replicate RE world state — references RE resource UUIDs instead.
+Manager-layer state. Does not replicate RE world state — references RE resource SIDs (and UUIDs) instead.
 
 ```
 CampaignRuntimeState
-  session_id              uuid              RE session ID (shared key)
+  session_id              uuid              RE session UUID (internal key)
+  session_sid             sid               8-char short ID for URL paths
   campaign_id             uuid
+  campaign_sid            sid
   flow_phase              FlowPhase
   active_scene_id         uuid | null       UUID of RE scene resource
+  active_scene_sid        sid  | null       Short ID of RE scene resource
   plot_map_ids            uuid[]            RE temporal map UUIDs tracking plot threads
   player_actor_ids        uuid[]            RE entity UUIDs of player characters
   current_actor_id        uuid | null       RE entity UUID of whose turn it is
@@ -102,11 +132,13 @@ References RE resources; does not embed their content.
 ```
 SceneDefinition
   scene_id                uuid
+  scene_sid               sid
   mode                    "battle_map" | "theater_of_mind"
   presentation            "battle_map" | "travel" | "social" | "shop" | "info"
   participants            uuid[]         RE entity UUIDs
   resources
     spatial_map_id        uuid | null    RE spatial map UUID (battle_map mode)
+    spatial_map_sid       sid  | null    RE spatial map short ID
     temporal_map_ids      uuid[]         RE temporal map UUIDs (plot threads for this scene)
     group_ids             uuid[]         RE group UUIDs
     tracker_ids           uuid[]         RE tracker UUIDs
@@ -136,6 +168,7 @@ campaign_end
 ```
 WizardSessionState
   wizard_id               uuid
+  wizard_sid              sid
   wizard_type             "character_creation" | "level_up" | ...
   step                    integer
   inputs                  {}             accumulated answers
@@ -148,6 +181,7 @@ WizardSessionState
 ```
 SystemTask
   task_id                 uuid
+  task_sid                sid
   task_type               "draw_deck"
                         | "weather_tick"
                         | "random_encounter_check"
@@ -326,15 +360,17 @@ The RE distinguishes three visibility concepts, each with different authority:
 {
   "uuid":         "<uuid>",          // idempotency key; always provide to support retries
   "actor_id":     "<entity_uuid>",   // RE entity UUID; system entity UUID for system actions
+  "actor_sid":    "<entity_sid>",    // short ID — used when constructing the RE URL path
   "action_type":  "<canonical_verb>",
   "source_type":  "player|gm|llm|system",
   "target_id":    "<entity_uuid>",   // optional
+  "target_sid":   "<entity_sid>",    // optional
   "instrument":   "<entity_uuid>",   // optional
   "X-Correlation-Id": "<uuid>"       // passed as request header for tracing
 }
 ```
 
-> `uuid` on the envelope is RE's idempotency key. The tracing correlation ID is a separate header concern, not part of the action payload.
+> `uuid` on the envelope is RE's idempotency key. `*_sid` fields are short IDs used in RE URL path segments. The tracing correlation ID is a separate header concern, not part of the action payload.
 
 ### 6.2 Action Result (RE → GM)
 
@@ -561,28 +597,42 @@ Tasks are logged in the manager journal. On replay, tasks already fired (identif
 
 GameManager exposes a flow-oriented API layered above the RE. Some endpoints are pure GM concerns; others mediate calls to RE.
 
+### 11.0 Short ID in URL Paths
+
+All path parameters named `{sid}` are **8-character short IDs** (`[A-Za-z0-9]`). Every `POST` that creates a resource returns both `uuid` and `sid` in the response body. UUID lookup is available via `?uuid=<uuid>` on any GET endpoint.
+
+```
+# Short and readable
+POST   /v1/sessions                   →  { "uuid": "550e8400-...", "sid": "aB3kR7mX" }
+GET    /v1/sessions/aB3kR7mX/flow
+
+# UUID lookup still works
+GET    /v1/sessions?uuid=550e8400-e29b-41d4-a716-446655440000
+```
+
 ### 11.1 Session and Campaign
 
 ```
-POST   /v1/sessions                           Create GM session + RE session
-POST   /v1/sessions/{id}/campaign             Load campaign: seed RE world state, init GM runtime
-GET    /v1/sessions/{id}/campaign             Campaign metadata and plot progress
+POST   /v1/sessions                            Create GM session + RE session
+                                               Returns: { uuid, sid, flow_phase }
+POST   /v1/sessions/{sid}/campaign             Load campaign: seed RE world state, init GM runtime
+GET    /v1/sessions/{sid}/campaign             Campaign metadata and plot progress
 ```
 
 ### 11.2 Flow and Scene
 
 ```
-GET    /v1/sessions/{id}/flow                 Returns UIFlowSnapshot (GM-built from RE + manager state)
-POST   /v1/sessions/{id}/flow/advance         Trigger a flow phase advance
-GET    /v1/sessions/{id}/scene                Proxied from RE scene + GM annotations
-PUT    /v1/sessions/{id}/scene                GM scene override (delegates to RE PUT /scene)
+GET    /v1/sessions/{sid}/flow                 Returns UIFlowSnapshot (GM-built from RE + manager state)
+POST   /v1/sessions/{sid}/flow/advance         Trigger a flow phase advance
+GET    /v1/sessions/{sid}/scene                Proxied from RE scene + GM annotations
+PUT    /v1/sessions/{sid}/scene                GM scene override (delegates to RE PUT /scene)
 ```
 
 ### 11.3 Player Action Path
 
 ```
-POST   /v1/sessions/{id}/actions              GM phase-gates then submits to RE action pipeline
-POST   /v1/sessions/{id}/actions/suggest      GM-augmented affordances (delegates to RE suggest + adds wizard/flow context)
+POST   /v1/sessions/{sid}/actions              GM phase-gates then submits to RE action pipeline
+POST   /v1/sessions/{sid}/actions/suggest      GM-augmented affordances (delegates to RE suggest + adds wizard/flow context)
 ```
 
 All action requests propagate a `X-Correlation-Id` header through to RE.
@@ -590,24 +640,24 @@ All action requests propagate a `X-Correlation-Id` header through to RE.
 ### 11.4 Wizard Path
 
 ```
-GET    /v1/sessions/{id}/wizard               Current WizardPrompt (404 if none active)
-POST   /v1/sessions/{id}/wizard/input         Submit wizard step input
-POST   /v1/sessions/{id}/wizard/cancel        Cancel active wizard
+GET    /v1/sessions/{sid}/wizard               Current WizardPrompt (404 if none active)
+POST   /v1/sessions/{sid}/wizard/input         Submit wizard step input
+POST   /v1/sessions/{sid}/wizard/cancel        Cancel active wizard
 ```
 
 ### 11.5 Save / Load / Recovery
 
 ```
-POST   /v1/sessions/{id}/saves                Snapshot GM state + call RE POST /saves
-GET    /v1/sessions/{id}/saves                List save slots (delegates to RE GET /saves)
-POST   /v1/sessions/{id}/saves/{slot}/load    Restore GM state + call RE POST /saves/{slot}/load
+POST   /v1/sessions/{sid}/saves                Snapshot GM state + call RE POST /saves
+GET    /v1/sessions/{sid}/saves                List save slots (delegates to RE GET /saves)
+POST   /v1/sessions/{sid}/saves/{slot}/load    Restore GM state + call RE POST /saves/{slot}/load
 ```
 
 ### 11.6 Journal and Replay
 
 ```
-GET    /v1/sessions/{id}/journal              Delegated to RE GET /journal
-POST   /v1/sessions/{id}/journal/replay       Delegates to RE POST /journal/replay; rebuilds GM phase from snapshot
+GET    /v1/sessions/{sid}/journal              Delegated to RE GET /journal
+POST   /v1/sessions/{sid}/journal/replay       Delegates to RE POST /journal/replay; rebuilds GM phase from snapshot
 ```
 
 ---

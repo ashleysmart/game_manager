@@ -29,14 +29,47 @@ endpoint that reaches RE forwards the `X-Correlation-Id` request header.
 
 ### 2.1 URL Structure
 
-All endpoints are scoped to a session:
+All endpoints are scoped to a session using an **8-character short ID** (`[A-Za-z0-9]`):
 
 ```
-/v1/sessions/{session_id}/...
+/v1/sessions/{sid}/...
 ```
 
-Session IDs are created by `POST /v1/sessions` and shared between GM and RE —
-the same UUID is used for both.
+**Short ID rules:**
+
+| Property | Detail |
+|---|---|
+| Format | 8 characters from `[A-Za-z0-9]` (62⁸ ≈ 218 trillion combinations) |
+| Generation | CSPRNG at resource creation; base-62 encoded |
+| Scope | Unique per resource type (sessions, entities, maps, groups, trackers, decks each namespaced separately) |
+| Immutability | Never changes after creation |
+| Coexistence | Every resource also carries a full UUID; both are returned on creation |
+
+**Example session creation:**
+
+```
+POST /v1/sessions
+→ 201 Created
+{
+  "uuid":       "550e8400-e29b-41d4-a716-446655440000",
+  "sid":        "aB3kR7mX",
+  "flow_phase": "bootstrap"
+}
+```
+
+Subsequent calls use the short ID:
+```
+GET /v1/sessions/aB3kR7mX/flow
+POST /v1/sessions/aB3kR7mX/actions
+```
+
+UUID lookup is available via query parameter for tooling and migration:
+```
+GET /v1/sessions?uuid=550e8400-e29b-41d4-a716-446655440000
+→ 301 Moved Permanently  Location: /v1/sessions/aB3kR7mX
+```
+
+The GM and RE share the same `sid` for the session — `POST /v1/sessions` creates both and the same `sid` is used when the GM calls RE endpoints for that session.
 
 ### 2.2 Endpoint Inventory
 
@@ -45,44 +78,44 @@ the same UUID is used for both.
 ```
 POST   /v1/sessions
          Creates GM runtime + RE session.
-         Returns: { session_id, flow_phase: "bootstrap" }
+         Returns: { uuid, sid, flow_phase: "bootstrap" }
 
-POST   /v1/sessions/{id}/campaign
+POST   /v1/sessions/{sid}/campaign
          Loads campaign data into GM + RE.  Seeds RE world state.
          Returns: UIFlowSnapshot (phase: campaign_selection or wizard_active)
 
-GET    /v1/sessions/{id}/campaign
+GET    /v1/sessions/{sid}/campaign
          Campaign metadata and current plot progress (reads RE temporal maps).
 ```
 
 #### Flow and Scene
 
 ```
-GET    /v1/sessions/{id}/flow
+GET    /v1/sessions/{sid}/flow
          Returns UIFlowSnapshot (assembled from RE world state + CampaignRuntimeState).
 
-POST   /v1/sessions/{id}/flow/advance
+POST   /v1/sessions/{sid}/flow/advance
          Explicit phase advance trigger (used by UI for confirmed transitions).
 
-GET    /v1/sessions/{id}/scene
+GET    /v1/sessions/{sid}/scene
          RE scene resource proxied with GM annotations
          (mode, presentation, participants, current actor, round).
 
-PUT    /v1/sessions/{id}/scene
+PUT    /v1/sessions/{sid}/scene
          GM scene override; delegates to RE PUT /scene.
 ```
 
 #### Player Action Path
 
 ```
-POST   /v1/sessions/{id}/actions
+POST   /v1/sessions/{sid}/actions
          Phase-gates; submits action envelope to RE.
          Body: action envelope (uuid, actor_id, action_type, source_type, ...)
          Returns: { re_result, flow_snapshot }
 
-POST   /v1/sessions/{id}/actions/suggest
+POST   /v1/sessions/{sid}/actions/suggest
          Returns augmented affordances:
-           1. Delegates to RE POST /v1/sessions/{id}/actions/suggest
+           1. Delegates to RE POST /v1/sessions/{sid}/actions/suggest
            2. Adds wizard-aware suggestions if wizard_active
            3. Filters by current flow_phase allow-list
          Returns: { action_type, suggestions: { ... } }
@@ -91,28 +124,28 @@ POST   /v1/sessions/{id}/actions/suggest
 #### Wizard Path
 
 ```
-GET    /v1/sessions/{id}/wizard
+GET    /v1/sessions/{sid}/wizard
          Returns WizardPrompt (404 if none active).
 
-POST   /v1/sessions/{id}/wizard/input
+POST   /v1/sessions/{sid}/wizard/input
          Submits step input.  On completion, translates to RE action envelopes.
          Returns: WizardPrompt (next step) or UIFlowSnapshot (wizard complete).
 
-POST   /v1/sessions/{id}/wizard/cancel
+POST   /v1/sessions/{sid}/wizard/cancel
          Cancels active wizard.  Returns: UIFlowSnapshot.
 ```
 
 #### Save / Load / Recovery
 
 ```
-POST   /v1/sessions/{id}/saves
+POST   /v1/sessions/{sid}/saves
          Snapshots GM CampaignRuntimeState + calls RE POST /saves.
          Body: { slot_name }
 
-GET    /v1/sessions/{id}/saves
+GET    /v1/sessions/{sid}/saves
          Delegates to RE GET /saves.
 
-POST   /v1/sessions/{id}/saves/{slot}/load
+POST   /v1/sessions/{sid}/saves/{slot}/load
          Restores GM CampaignRuntimeState + calls RE POST /saves/{slot}/load.
          Returns: UIFlowSnapshot.
 ```
@@ -120,10 +153,10 @@ POST   /v1/sessions/{id}/saves/{slot}/load
 #### Journal and Replay
 
 ```
-GET    /v1/sessions/{id}/journal
+GET    /v1/sessions/{sid}/journal
          Delegated to RE GET /journal.
 
-POST   /v1/sessions/{id}/journal/replay
+POST   /v1/sessions/{sid}/journal/replay
          Delegates to RE POST /journal/replay.  On completion, rebuilds GM
          phase from manager snapshot.
 ```
@@ -140,24 +173,24 @@ state plus `CampaignRuntimeState`.
 {
   "status":  "awaiting_player_action",
   "scene_summary": {
-    "mode":           "battle_map",
-    "presentation":   "visual",
-    "spatial_map_id": "<map_uuid>",
-    "active_actor":   "<entity_uuid>",
-    "round":          3,
+    "mode":            "battle_map",
+    "presentation":    "visual",
+    "spatial_map_sid": "mP9xW2qL",
+    "active_actor_sid":"eK4nT8vA",
+    "round":           3,
     "initiative_step": 2
   },
   "visibility": {
-    "faction_id":     "<faction_uuid>",
-    "explored_nodes": ["<node_uuid_1>", "<node_uuid_2>"],
-    "visible_nodes":  ["<node_uuid_2>"]
+    "faction_sid":    "fC2rY5jN",
+    "explored_nodes": ["nA1bZ3cD", "nB2cA4eF"],
+    "visible_nodes":  ["nB2cA4eF"]
   },
   "active_prompt":    "Your turn.  You are in the guard room.",
   "available_actions": [
-    { "action_type": "move",       "suggestions": { "location": ["<node_uuid_3>"] } },
-    { "action_type": "open_door",  "suggestions": { "target_id": ["<door_entity_uuid>"] } },
-    { "action_type": "attack",     "suggestions": { "target_id": ["<monster_uuid>"] } },
-    { "action_type": "use_portal", "suggestions": { "target_id": ["<portal_entity_uuid>"] } }
+    { "action_type": "move",       "suggestions": { "location":  ["nC3dB5fG"] } },
+    { "action_type": "open_door",  "suggestions": { "target_sid": ["dR7sQ1wE"] } },
+    { "action_type": "attack",     "suggestions": { "target_sid": ["mX6tP2yU"] } },
+    { "action_type": "use_portal", "suggestions": { "target_sid": ["pL4uN9kV"] } }
   ],
   "wizard":           null,
   "recent_journal_events": [...],
@@ -222,23 +255,23 @@ RE calls in order:
 5. POST /world/entities  (×p — portals)
    Body: { entity_type: "prop", blocks: { identity_block: {...},
            portal_block: { state: "active",
-                           destination_map_uuid: "<uuid>",
-                           destination_node_uuid: "<uuid>",
-                           return_portal_uuid: "<companion_portal_uuid>" } } }
-   → Both sides of bidirectional portal created together
+                           destination_map_sid: "mQ5tR3nX",
+                           destination_node_sid: "nD8kW2pY",
+                           return_portal_sid: "pA1bC4dE" } } }
+   → Both sides of bidirectional portal created together; sids known at creation time
 
 6. POST /world/entities  (×c — containers)
    Body: { entity_type: "item", blocks: { identity_block: {...},
-           container_block: { state: "closed", key_id: null, items: [] } } }
+           container_block: { state: "closed", key_sid: null, items: [] } } }
 
-7. PUT /world/maps/{map_id}/presence/{entity_id}  (×all)
+7. PUT /world/maps/{map_sid}/presence/{entity_sid}  (×all)
    → Place every entity at its starting position
 
 8. POST /world/actions  (system, ×loot)
    action_type: "put_in_container"
    → Seed loot into containers via RE pipeline (journaled)
 
-9. PUT /world/maps/{map_id}/explored/{faction_id}
+9. PUT /world/maps/{map_sid}/explored/{faction_sid}
    → Pre-reveal scripted areas (optional; only for cutscene or known-location entry)
 
 10. POST /world/groups  (×sides)
@@ -295,13 +328,13 @@ Actor approaches node adjacent to door edge
 ProjectionBuilder reads RE affordances for actor
         │
 RE suggest returns: { action_type: ["move", "open_door", ...],
-                      target_id: ["<door_entity_uuid>"] }
+                      target_sid: ["dR7sQ1wE"] }
         │
 UIFlowSnapshot.available_actions includes open_door suggestion
         │
 Player selects open_door
         │
-GM POST /actions: { action_type: "open_door", target_id: "<door_entity_uuid>" }
+GM POST /actions: { action_type: "open_door", target_sid: "dR7sQ1wE" }
         │
 RE validates (reachable? state == closed?)
   → accepted: door_block.state → open; emits door_opened
@@ -340,7 +373,7 @@ defined by the ruleset) restores it.  GM does not need to track this; it reads
 ### 6.2 Scene Transition Sequence
 
 ```
-POST /actions { action_type: "use_portal", target_id: "<portal_uuid>" }
+POST /actions { action_type: "use_portal", target_sid: "pL4uN9kV" }
         │
 RE result: accepted_and_committed
   emitted_events:
@@ -409,7 +442,7 @@ surfaces the reason to the UI.
 
 ### 8.1 Explored Index Reads
 
-`ProjectionBuilder` calls `GET /world/maps/{map_id}/explored/{faction_id}` on
+`ProjectionBuilder` calls `GET /world/maps/{map_sid}/explored/{faction_sid}` on
 every `UIFlowSnapshot` build.  The response is used directly in the
 `visibility.explored_nodes` field — no caching, no transformation.
 
@@ -418,8 +451,8 @@ every `UIFlowSnapshot` build.  The response is used directly in the
 `BattleMapOrchestrator.setup` may call:
 
 ```
-PUT /world/maps/{map_id}/explored/{faction_id}
-Body: { "nodes": ["<node_uuid_1>", "<node_uuid_2>"] }
+PUT /world/maps/{map_sid}/explored/{faction_sid}
+Body: { "nodes": ["nA1bZ3cD", "nB2cA4eF"] }
 ```
 
 This is a scene-configuration write, treated identically to entity placement.
@@ -430,7 +463,7 @@ envelope with `action_type: clear_explored` (if defined by the ruleset) or
 call:
 
 ```
-DELETE /world/maps/{map_id}/explored/{faction_id}
+DELETE /world/maps/{map_sid}/explored/{faction_sid}
 ```
 
 during scene setup only.  Runtime fog resets during active play should always
@@ -450,32 +483,37 @@ uses shared-awareness mechanics.
 Quick reference for all RE endpoints called by GM.  Full specification is in
 the RE API Design document.
 
+All RE endpoint paths use `{sid}` short IDs.  The session `{sid}` is shared —
+the same short ID issued by `POST /v1/sessions` is used when the GM calls RE.
+Sub-resource path params (`{entity_sid}`, `{map_sid}`, `{deck_sid}`,
+`{faction_sid}`) are the short IDs returned when those RE resources were created.
+
 ### 9.1 Frequently Called
 
 | RE endpoint | When called by GM |
 |---|---|
-| `POST /v1/sessions/{id}/actions` | Every player and system action |
-| `POST /v1/sessions/{id}/actions/suggest` | Every affordance request |
-| `GET  /v1/sessions/{id}/world/entities/{id}` | Read entity block for projection |
-| `GET  /v1/sessions/{id}/world/clock` | Turn tracking, encounter phase |
-| `PUT  /v1/sessions/{id}/world/clock` | Encounter start/end, time advance |
-| `GET  /v1/sessions/{id}/world/maps/{id}/presence/{entity_id}` | Actor position reads |
-| `PUT  /v1/sessions/{id}/world/maps/{id}/presence/{entity_id}` | Scene setup only |
-| `GET  /v1/sessions/{id}/world/maps/{id}/explored/{faction_id}` | Fog of war projection |
-| `PUT  /v1/sessions/{id}/world/maps/{id}/explored/{faction_id}` | Scripted revelation (setup only) |
-| `POST /v1/sessions/{id}/turn/end` | End-of-turn processing |
-| `POST /v1/sessions/{id}/world/decks/{id}/draw` | Deck-driven events |
+| `POST /v1/sessions/{sid}/actions` | Every player and system action |
+| `POST /v1/sessions/{sid}/actions/suggest` | Every affordance request |
+| `GET  /v1/sessions/{sid}/world/entities/{entity_sid}` | Read entity block for projection |
+| `GET  /v1/sessions/{sid}/world/clock` | Turn tracking, encounter phase |
+| `PUT  /v1/sessions/{sid}/world/clock` | Encounter start/end, time advance |
+| `GET  /v1/sessions/{sid}/world/maps/{map_sid}/presence/{entity_sid}` | Actor position reads |
+| `PUT  /v1/sessions/{sid}/world/maps/{map_sid}/presence/{entity_sid}` | Scene setup only |
+| `GET  /v1/sessions/{sid}/world/maps/{map_sid}/explored/{faction_sid}` | Fog of war projection |
+| `PUT  /v1/sessions/{sid}/world/maps/{map_sid}/explored/{faction_sid}` | Scripted revelation (setup only) |
+| `POST /v1/sessions/{sid}/turn/end` | End-of-turn processing |
+| `POST /v1/sessions/{sid}/world/decks/{deck_sid}/draw` | Deck-driven events |
 
 ### 9.2 Scene Setup Only
 
 | RE endpoint | Purpose |
 |---|---|
-| `POST /v1/sessions/{id}/world/entities` | Spawn all entity types incl. doors, portals, containers |
-| `POST /v1/sessions/{id}/world/maps` | Create spatial or temporal map |
-| `POST /v1/sessions/{id}/world/groups` | Create encounter / command groups |
-| `POST /v1/sessions/{id}/world/trackers` | Create route, supply, etc. trackers |
-| `POST /v1/sessions/{id}/world/decks` | Create event / encounter / quest decks |
-| `PUT  /v1/sessions/{id}/scene` | Set active scene mode and resource references |
+| `POST /v1/sessions/{sid}/world/entities` | Spawn all entity types incl. doors, portals, containers |
+| `POST /v1/sessions/{sid}/world/maps` | Create spatial or temporal map |
+| `POST /v1/sessions/{sid}/world/groups` | Create encounter / command groups |
+| `POST /v1/sessions/{sid}/world/trackers` | Create route, supply, etc. trackers |
+| `POST /v1/sessions/{sid}/world/decks` | Create event / encounter / quest decks |
+| `PUT  /v1/sessions/{sid}/scene` | Set active scene mode and resource references |
 
 ---
 

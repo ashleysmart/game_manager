@@ -89,15 +89,15 @@ Every GM-owned and RE-owned resource carries two identifiers:
 - Immutable after creation.
 - 62⁸ ≈ 218 trillion — collision probability negligible for expected dataset sizes.
 
-**URL routing:** All GM and RE URL path segments use `{sid}`. Lookup by UUID is supported via a query parameter (`?uuid=<uuid>`) for tooling and migration. The canonical URL always uses the `sid`.
+**URL routing:** All GM and RE URL path segments use `{sid}` exclusively. UUIDs are **never valid in a URL path**. A request with a UUID in a path segment returns `400 Bad Request`. UUIDs exist only as internal storage keys and idempotency keys in request/response bodies.
 
 **Example:**
 ```
-Full UUID:  /v1/sessions/550e8400-e29b-41d4-a716-446655440000/flow
-Short ID:   /v1/sessions/aB3kR7mX/flow
+✓  GET /v1/sessions/aB3kR7mX/flow          (sid — correct)
+✗  GET /v1/sessions/550e8400-e29b-41d4-a716-446655440000/flow   (uuid in path — 400)
 ```
 
-The short ID is included in every resource response alongside the UUID so clients can construct short URLs immediately.
+The short ID is included in every resource creation response alongside the UUID so clients always have it available immediately.
 
 ---
 
@@ -599,15 +599,12 @@ GameManager exposes a flow-oriented API layered above the RE. Some endpoints are
 
 ### 11.0 Short ID in URL Paths
 
-All path parameters named `{sid}` are **8-character short IDs** (`[A-Za-z0-9]`). Every `POST` that creates a resource returns both `uuid` and `sid` in the response body. UUID lookup is available via `?uuid=<uuid>` on any GET endpoint.
+All path parameters named `{sid}` are **8-character short IDs** (`[A-Za-z0-9]`). Every `POST` that creates a resource returns both `uuid` and `sid` in the response body. **UUIDs are never accepted in URL path segments** — passing a UUID in a path returns `400 Bad Request`.
 
 ```
-# Short and readable
 POST   /v1/sessions                   →  { "uuid": "550e8400-...", "sid": "aB3kR7mX" }
-GET    /v1/sessions/aB3kR7mX/flow
-
-# UUID lookup still works
-GET    /v1/sessions?uuid=550e8400-e29b-41d4-a716-446655440000
+GET    /v1/sessions/aB3kR7mX/flow     →  200 OK
+GET    /v1/sessions/550e8400-.../flow →  400 Bad Request  (UUID in path — invalid)
 ```
 
 ### 11.1 Session and Campaign

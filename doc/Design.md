@@ -43,7 +43,9 @@ All endpoints are scoped to a session using an **8-character short ID** (`[A-Za-
 | Generation | CSPRNG at resource creation; base-62 encoded |
 | Scope | Unique per resource type (sessions, entities, maps, groups, trackers, decks each namespaced separately) |
 | Immutability | Never changes after creation |
-| Coexistence | Every resource also carries a full UUID; both are returned on creation |
+| Coexistence | Every resource also carries a full UUID returned in the body — but the UUID is **never valid in a URL path** |
+
+**UUID path enforcement:** Any request with a UUID in a path segment is rejected with `400 Bad Request`. UUIDs appear only in request/response bodies (idempotency key, storage FK, cross-reference fields).
 
 **Example session creation:**
 
@@ -57,16 +59,11 @@ POST /v1/sessions
 }
 ```
 
-Subsequent calls use the short ID:
+All subsequent calls use only the `sid`:
 ```
-GET /v1/sessions/aB3kR7mX/flow
-POST /v1/sessions/aB3kR7mX/actions
-```
-
-UUID lookup is available via query parameter for tooling and migration:
-```
-GET /v1/sessions?uuid=550e8400-e29b-41d4-a716-446655440000
-→ 301 Moved Permanently  Location: /v1/sessions/aB3kR7mX
+✓  GET  /v1/sessions/aB3kR7mX/flow
+✓  POST /v1/sessions/aB3kR7mX/actions
+✗  GET  /v1/sessions/550e8400-e29b-41d4-a716-446655440000/flow  → 400
 ```
 
 The GM and RE share the same `sid` for the session — `POST /v1/sessions` creates both and the same `sid` is used when the GM calls RE endpoints for that session.

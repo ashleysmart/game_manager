@@ -1,0 +1,54 @@
+{
+  "campaign_id": "smoke_combat_lonewolf",
+  "title": "Smoke Test — Combat (Lone Wolf)",
+  "ruleset_id": "lone_wolf",
+  "plot_nodes": [
+    {
+      "node_id": "combat_node_1",
+      "title": "Ambush in the Forest",
+      "scene_type": "battle",
+      "entry_conditions": [],
+      "exit_conditions": [
+        { "type": "all_enemies_defeated" },
+        { "type": "player_defeated" }
+      ],
+      "scene_config": {
+        "mode": "battle_map",
+        "presentation": "battle_map",
+        "map": {
+          "family": "spatial",
+          "level": "graph",
+          "nodes": [
+            { "node_id": "north", "name": "Forest Path — North" },
+            { "node_id": "south", "name": "Forest Path — South" }
+          ],
+          "edges": [
+            { "from": "north", "to": "south", "bidirectional": true }
+          ]
+        },
+        "entity_templates": [
+          {
+            "role": "player",
+            "entity_type": "player_character",
+            "start_node": "north",
+            "blocks": {
+              "identity_block": { "name": "Lone Wolf" },
+              "stat_block": { "combat_skill": 14, "endurance": 25 }
+            }
+          },
+          {
+            "role": "enemy",
+            "entity_type": "monster",
+            "start_node": "south",
+            "count": 2,
+            "blocks": {
+              "identity_block": { "name": "Giak Soldier" },
+              "stat_block": { "combat_skill": 10, "endurance": 10 }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "starting_node_id": "combat_node_1"
+}

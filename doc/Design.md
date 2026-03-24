@@ -105,7 +105,7 @@ PUT    /v1/sessions/{sid}/scene
 ```
 POST   /v1/sessions/{sid}/actions
          Phase-gates; submits action envelope to RE.
-         Body: action envelope (idempotency_key, actor_sid, action_type, source_type, ...)
+         Body: action envelope (idempotency_key, actor_id, action_type, source_type, ...)
          Returns: { re_result, flow_snapshot }
 
 POST   /v1/sessions/{sid}/actions/suggest
@@ -170,22 +170,22 @@ state plus `CampaignRuntimeState`.
   "scene_summary": {
     "mode":            "battle_map",
     "presentation":    "visual",
-    "spatial_map_sid": "mP9xW2qL",
-    "active_actor_sid":"eK4nT8vA",
+    "spatial_map_id": "mP9xW2qL",
+    "active_actor_id":"eK4nT8vA",
     "round":           3,
     "initiative_step": 2
   },
   "visibility": {
-    "faction_sid":    "fC2rY5jN",
+    "faction_id":    "fC2rY5jN",
     "explored_nodes": ["nA1bZ3cD", "nB2cA4eF"],
     "visible_nodes":  ["nB2cA4eF"]
   },
   "active_prompt":    "Your turn.  You are in the guard room.",
   "available_actions": [
     { "action_type": "move",       "suggestions": { "location":  ["nC3dB5fG"] } },
-    { "action_type": "open_door",  "suggestions": { "target_sid": ["dR7sQ1wE"] } },
-    { "action_type": "attack",     "suggestions": { "target_sid": ["mX6tP2yU"] } },
-    { "action_type": "use_portal", "suggestions": { "target_sid": ["pL4uN9kV"] } }
+    { "action_type": "open_door",  "suggestions": { "target_id": ["dR7sQ1wE"] } },
+    { "action_type": "attack",     "suggestions": { "target_id": ["mX6tP2yU"] } },
+    { "action_type": "use_portal", "suggestions": { "target_id": ["pL4uN9kV"] } }
   ],
   "wizard":           null,
   "recent_journal_events": [...],
@@ -197,7 +197,7 @@ state plus `CampaignRuntimeState`.
 
 The `visibility` block in `UIFlowSnapshot` is derived by `ProjectionBuilder`:
 
-1. Read `GET /world/maps/{map_sid}/explored/{faction_sid}` → `explored_nodes`.
+1. Read `GET /world/maps/{map_id}/explored/{faction_id}` → `explored_nodes`.
 2. Request LoS from RE affordance layer (or compute from positions + terrain
    geometry for simple cases) → `visible_nodes` = explored ∩ current LoS.
 3. Nodes not in `explored_nodes` are unrevealed (dark).
@@ -212,7 +212,7 @@ exists in the GM layer.
 `available_actions` is populated by augmenting RE affordances:
 
 - RE `suggest` returns legal verbs and candidates (doors, portals, containers
-  are surfaced as `target_sid` suggestions when in range and accessible).
+  are surfaced as `target_id` suggestions when in range and accessible).
 - GM wraps the RE suggestions with GM-layer context (current phase allow-list,
   wizard actions if applicable).
 - Door verbs (`open_door`, `close_door`, `lock_door`, `unlock_door`,
@@ -250,23 +250,23 @@ RE calls in order:
 5. POST /world/entities  (×p — portals)
    Body: { entity_type: "prop", blocks: { identity_block: {...},
            portal_block: { state: "active",
-                           destination_map_sid: "mQ5tR3nX",
-                           destination_node_sid: "nD8kW2pY",
-                           return_portal_sid: "pA1bC4dE" } } }
+                           destination_map_id: "mQ5tR3nX",
+                           destination_node_id: "nD8kW2pY",
+                           return_portal_id: "pA1bC4dE" } } }
    → Both sides of bidirectional portal created together; sids known at creation time
 
 6. POST /world/entities  (×c — containers)
    Body: { entity_type: "item", blocks: { identity_block: {...},
-           container_block: { state: "closed", key_sid: null, items: [] } } }
+           container_block: { state: "closed", key_id: null, items: [] } } }
 
-7. PUT /world/maps/{map_sid}/presence/{entity_sid}  (×all)
+7. PUT /world/maps/{map_id}/presence/{entity_id}  (×all)
    → Place every entity at its starting position
 
 8. POST /world/actions  (system, ×loot)
    action_type: "put_in_container"
    → Seed loot into containers via RE pipeline (journaled)
 
-9. PUT /world/maps/{map_sid}/explored/{faction_sid}
+9. PUT /world/maps/{map_id}/explored/{faction_id}
    → Pre-reveal scripted areas (optional; only for cutscene or known-location entry)
 
 10. POST /world/groups  (×sides)
@@ -323,13 +323,13 @@ Actor approaches node adjacent to door edge
 ProjectionBuilder reads RE affordances for actor
         │
 RE suggest returns: { action_type: ["move", "open_door", ...],
-                      target_sid: ["dR7sQ1wE"] }
+                      target_id: ["dR7sQ1wE"] }
         │
 UIFlowSnapshot.available_actions includes open_door suggestion
         │
 Player selects open_door
         │
-GM POST /actions: { action_type: "open_door", target_sid: "dR7sQ1wE" }
+GM POST /actions: { action_type: "open_door", target_id: "dR7sQ1wE" }
         │
 RE validates (reachable? state == closed?)
   → accepted: door_block.state → open; emits door_opened
@@ -368,14 +368,14 @@ defined by the ruleset) restores it.  GM does not need to track this; it reads
 ### 6.2 Scene Transition Sequence
 
 ```
-POST /actions { action_type: "use_portal", target_sid: "pL4uN9kV" }
+POST /actions { action_type: "use_portal", target_id: "pL4uN9kV" }
         │
 RE result: accepted_and_committed
   emitted_events:
-    - portal_transition_completed { actor_sid, from_map_sid, from_node_sid,
-                                    to_map_sid, to_node_sid }
-    - scene_transition_requested  { from_map_sid, to_map_sid,
-                                    destination_node_sid }
+    - portal_transition_completed { actor_id, from_map_id, from_node_id,
+                                    to_map_id, to_node_id }
+    - scene_transition_requested  { from_map_id, to_map_id,
+                                    destination_node_id }
         │
 SceneOrchestrator.onEvents:
   detect scene_transition_requested
@@ -422,7 +422,7 @@ locked ──unlock_door(*) ──► closed
 `put_in_container` appears when:
 - Actor holds items (`inventory_block.items` non-empty).
 - Container is in reach and `open`.
-- RE affordance returns container SID as `container_sid` candidate.
+- RE affordance returns container SID as `container_id` candidate.
 
 ### 7.3 Nested Container Handling
 
@@ -437,7 +437,7 @@ surfaces the reason to the UI.
 
 ### 8.1 Explored Index Reads
 
-`ProjectionBuilder` calls `GET /world/maps/{map_sid}/explored/{faction_sid}` on
+`ProjectionBuilder` calls `GET /world/maps/{map_id}/explored/{faction_id}` on
 every `UIFlowSnapshot` build.  The response is used directly in the
 `visibility.explored_nodes` field — no caching, no transformation.
 
@@ -446,7 +446,7 @@ every `UIFlowSnapshot` build.  The response is used directly in the
 `BattleMapOrchestrator.setup` may call:
 
 ```
-PUT /world/maps/{map_sid}/explored/{faction_sid}
+PUT /world/maps/{map_id}/explored/{faction_id}
 Body: { "nodes": ["nA1bZ3cD", "nB2cA4eF"] }
 ```
 
@@ -458,7 +458,7 @@ envelope with `action_type: clear_explored` (if defined by the ruleset) or
 call:
 
 ```
-DELETE /world/maps/{map_sid}/explored/{faction_sid}
+DELETE /world/maps/{map_id}/explored/{faction_id}
 ```
 
 during scene setup only.  Runtime fog resets during active play should always
@@ -480,8 +480,8 @@ the RE API Design document.
 
 All RE endpoint paths use `{sid}` short IDs.  The session `{sid}` is shared —
 the same short ID issued by `POST /v1/sessions` is used when the GM calls RE.
-Sub-resource path params (`{entity_sid}`, `{map_sid}`, `{deck_sid}`,
-`{faction_sid}`) are the short IDs returned when those RE resources were created.
+Sub-resource path params (`{entity_id}`, `{map_id}`, `{deck_id}`,
+`{faction_id}`) are the short IDs returned when those RE resources were created.
 
 ### 9.1 Frequently Called
 
@@ -489,15 +489,15 @@ Sub-resource path params (`{entity_sid}`, `{map_sid}`, `{deck_sid}`,
 |---|---|
 | `POST /v1/sessions/{sid}/actions` | Every player and system action |
 | `POST /v1/sessions/{sid}/actions/suggest` | Every affordance request |
-| `GET  /v1/sessions/{sid}/world/entities/{entity_sid}` | Read entity block for projection |
+| `GET  /v1/sessions/{sid}/world/entities/{entity_id}` | Read entity block for projection |
 | `GET  /v1/sessions/{sid}/world/clock` | Turn tracking, encounter phase |
 | `PUT  /v1/sessions/{sid}/world/clock` | Encounter start/end, time advance |
-| `GET  /v1/sessions/{sid}/world/maps/{map_sid}/presence/{entity_sid}` | Actor position reads |
-| `PUT  /v1/sessions/{sid}/world/maps/{map_sid}/presence/{entity_sid}` | Scene setup only |
-| `GET  /v1/sessions/{sid}/world/maps/{map_sid}/explored/{faction_sid}` | Fog of war projection |
-| `PUT  /v1/sessions/{sid}/world/maps/{map_sid}/explored/{faction_sid}` | Scripted revelation (setup only) |
+| `GET  /v1/sessions/{sid}/world/maps/{map_id}/presence/{entity_id}` | Actor position reads |
+| `PUT  /v1/sessions/{sid}/world/maps/{map_id}/presence/{entity_id}` | Scene setup only |
+| `GET  /v1/sessions/{sid}/world/maps/{map_id}/explored/{faction_id}` | Fog of war projection |
+| `PUT  /v1/sessions/{sid}/world/maps/{map_id}/explored/{faction_id}` | Scripted revelation (setup only) |
 | `POST /v1/sessions/{sid}/turn/end` | End-of-turn processing |
-| `POST /v1/sessions/{sid}/world/decks/{deck_sid}/draw` | Deck-driven events |
+| `POST /v1/sessions/{sid}/world/decks/{deck_id}/draw` | Deck-driven events |
 
 ### 9.2 Scene Setup Only
 

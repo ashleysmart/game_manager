@@ -43,9 +43,9 @@ All endpoints are scoped to a session using an **8-character short ID** (`[A-Za-
 | Generation | CSPRNG at resource creation; base-62 encoded |
 | Scope | Unique per resource type (sessions, entities, maps, groups, trackers, decks each namespaced separately) |
 | Immutability | Never changes after creation |
-| Coexistence | Every resource also carries a full UUID returned in the body — but the UUID is **never valid in a URL path** |
+| API exposure | `sid` only — no UUID is returned in any response body |
 
-**UUID path enforcement:** Any request with a UUID in a path segment is rejected with `400 Bad Request`. UUIDs appear only in request/response bodies (idempotency key, storage FK, cross-reference fields).
+**Path enforcement:** Any non-sid value in a path segment (including a UUID) returns `400 Bad Request`.
 
 **Example session creation:**
 
@@ -53,17 +53,15 @@ All endpoints are scoped to a session using an **8-character short ID** (`[A-Za-
 POST /v1/sessions
 → 201 Created
 {
-  "uuid":       "550e8400-e29b-41d4-a716-446655440000",
   "sid":        "aB3kR7mX",
   "flow_phase": "bootstrap"
 }
 ```
 
-All subsequent calls use only the `sid`:
+All calls use only the `sid`:
 ```
 ✓  GET  /v1/sessions/aB3kR7mX/flow
 ✓  POST /v1/sessions/aB3kR7mX/actions
-✗  GET  /v1/sessions/550e8400-e29b-41d4-a716-446655440000/flow  → 400
 ```
 
 The GM and RE share the same `sid` for the session — `POST /v1/sessions` creates both and the same `sid` is used when the GM calls RE endpoints for that session.
@@ -75,7 +73,7 @@ The GM and RE share the same `sid` for the session — `POST /v1/sessions` creat
 ```
 POST   /v1/sessions
          Creates GM runtime + RE session.
-         Returns: { uuid, sid, flow_phase: "bootstrap" }
+         Returns: { sid, flow_phase: "bootstrap" }
 
 POST   /v1/sessions/{sid}/campaign
          Loads campaign data into GM + RE.  Seeds RE world state.
@@ -107,7 +105,7 @@ PUT    /v1/sessions/{sid}/scene
 ```
 POST   /v1/sessions/{sid}/actions
          Phase-gates; submits action envelope to RE.
-         Body: action envelope (uuid, actor_id, action_type, source_type, ...)
+         Body: action envelope (idempotency_key, actor_sid, action_type, source_type, ...)
          Returns: { re_result, flow_snapshot }
 
 POST   /v1/sessions/{sid}/actions/suggest
@@ -199,7 +197,7 @@ state plus `CampaignRuntimeState`.
 
 The `visibility` block in `UIFlowSnapshot` is derived by `ProjectionBuilder`:
 
-1. Read `GET /world/maps/{map_id}/explored/{faction_id}` → `explored_nodes`.
+1. Read `GET /world/maps/{map_sid}/explored/{faction_sid}` → `explored_nodes`.
 2. Request LoS from RE affordance layer (or compute from positions + terrain
    geometry for simple cases) → `visible_nodes` = explored ∩ current LoS.
 3. Nodes not in `explored_nodes` are unrevealed (dark).
@@ -214,7 +212,7 @@ exists in the GM layer.
 `available_actions` is populated by augmenting RE affordances:
 
 - RE `suggest` returns legal verbs and candidates (doors, portals, containers
-  are surfaced as `target_id` suggestions when in range and accessible).
+  are surfaced as `target_sid` suggestions when in range and accessible).
 - GM wraps the RE suggestions with GM-layer context (current phase allow-list,
   wizard actions if applicable).
 - Door verbs (`open_door`, `close_door`, `lock_door`, `unlock_door`,
@@ -374,10 +372,10 @@ POST /actions { action_type: "use_portal", target_sid: "pL4uN9kV" }
         │
 RE result: accepted_and_committed
   emitted_events:
-    - portal_transition_completed { actor_id, from_map_uuid, from_node_uuid,
-                                    to_map_uuid, to_node_uuid }
-    - scene_transition_requested  { from_map_uuid, to_map_uuid,
-                                    destination_node_uuid }
+    - portal_transition_completed { actor_sid, from_map_sid, from_node_sid,
+                                    to_map_sid, to_node_sid }
+    - scene_transition_requested  { from_map_sid, to_map_sid,
+                                    destination_node_sid }
         │
 SceneOrchestrator.onEvents:
   detect scene_transition_requested
@@ -419,12 +417,12 @@ locked ──unlock_door(*) ──► closed
 
 `take_from_container` appears in `available_actions` when:
 - Container is in reach and `container_block.state == open`.
-- RE affordance returns item UUIDs inside the container as `instrument` candidates.
+- RE affordance returns item SIDs inside the container as `instrument` candidates.
 
 `put_in_container` appears when:
 - Actor holds items (`inventory_block.items` non-empty).
 - Container is in reach and `open`.
-- RE affordance returns container UUID as `container_id` candidate.
+- RE affordance returns container SID as `container_sid` candidate.
 
 ### 7.3 Nested Container Handling
 

@@ -1,0 +1,102 @@
+{
+  "campaign_id": "smoke_combat_dnd5",
+  "title": "Smoke Test — Combat (D&D SRD 5.2)",
+  "ruleset_id": "dnd_srd_5_2_1",
+  "plot_nodes": [
+    {
+      "node_id": "combat_node_1",
+      "title": "Goblin Ambush",
+      "scene_type": "battle",
+      "entry_conditions": [],
+      "exit_conditions": [
+        { "type": "all_enemies_defeated" },
+        { "type": "player_defeated" }
+      ],
+      "scene_config": {
+        "mode": "battle_map",
+        "presentation": "battle_map",
+        "map": {
+          "family": "spatial",
+          "level": "graph",
+          "nodes": [
+            { "node_id": "clearing",  "name": "Clearing" },
+            { "node_id": "treeline",  "name": "Treeline" }
+          ],
+          "edges": [
+            { "from": "clearing", "to": "treeline", "bidirectional": true }
+          ]
+        },
+        "entity_templates": [
+          {
+            "role": "player",
+            "entity_type": "player_character",
+            "start_node": "clearing",
+            "blocks": {
+              "identity_block": {
+                "name": "Test Fighter",
+                "class": "fighter",
+                "race": "human",
+                "level": 3
+              },
+              "stat_block": {
+                "str": 16, "dex": 12, "con": 14,
+                "int": 10, "wis": 11, "cha": 10
+              },
+              "save_block": {
+                "str_save_prof": true,
+                "con_save_prof": true
+              },
+              "action_block": {
+                "actions": 1,
+                "bonus_actions": 1,
+                "reactions": 1,
+                "speed": 30
+              },
+              "hp_block": { "max_hp": 28, "current_hp": 28 },
+              "ac_block": { "armor_class": 16 },
+              "equipment_block": {
+                "main_hand": {
+                  "name": "Longsword",
+                  "damage_dice": "1d8",
+                  "damage_type": "slashing",
+                  "attack_bonus": 5
+                },
+                "armor": { "name": "Chain Mail", "armor_class": 16 }
+              }
+            }
+          },
+          {
+            "role": "enemy",
+            "entity_type": "monster",
+            "start_node": "treeline",
+            "count": 2,
+            "blocks": {
+              "identity_block": { "name": "Goblin" },
+              "stat_block": {
+                "str": 8, "dex": 14, "con": 10,
+                "int": 10, "wis": 8,  "cha": 8
+              },
+              "action_block": {
+                "actions": 1,
+                "bonus_actions": 1,
+                "reactions": 1,
+                "speed": 30
+              },
+              "hp_block": { "max_hp": 7, "current_hp": 7 },
+              "ac_block": { "armor_class": 15 },
+              "equipment_block": {
+                "main_hand": {
+                  "name": "Scimitar",
+                  "damage_dice": "1d6",
+                  "damage_type": "slashing",
+                  "attack_bonus": 4
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "starting_node_id": "combat_node_1"
+}

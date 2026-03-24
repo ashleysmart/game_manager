@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# bin/curl_test — run GameManager smoke tests via pytest
+#
+# Usage:
+#   bin/curl_test                          # run all smoke tests
+#   bin/curl_test -v                       # verbose output
+#   bin/curl_test -k lonewolf             # run one suite only
+#   bin/curl_test -k dnd5                 # run the other suite
+#   GM_BASE=http://host:5001 bin/curl_test # target a non-default server
+#
+# Environment:
+#   GM_BASE   Base URL of the running GameManager (default: http://localhost:5001)
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# ── locate Python ──────────────────────────────────────────────────────────────
+
+# Prefer a virtualenv at .venv if present, then fall back to whatever is on PATH
+PYTHON="${REPO_ROOT}/.venv/bin/python"
+if [[ ! -x "$PYTHON" ]]; then
+  PYTHON="$(command -v python3 2>/dev/null || command -v python)"
+fi
+
+if [[ -z "$PYTHON" ]]; then
+  echo "ERROR: Python not found. Create a virtualenv or install Python 3.11+." >&2
+  exit 1
+fi
+
+# ── ensure dependencies are installed ─────────────────────────────────────────
+
+PYTEST="${REPO_ROOT}/.venv/bin/pytest"
+if [[ ! -x "$PYTEST" ]]; then
+  PYTEST="$(command -v pytest 2>/dev/null || true)"
+fi
+
+if [[ -z "$PYTEST" ]]; then
+  echo "pytest not found — installing test dependencies..."
+  "$PYTHON" -m pip install --quiet -e "${REPO_ROOT}[test]"
+  PYTEST="$("$PYTHON" -m pytest --version >/dev/null 2>&1 && echo "$PYTHON -m pytest" || true)"
+  PYTEST="$PYTHON -m pytest"
+fi
+
+# ── run ────────────────────────────────────────────────────────────────────────
+
+echo ""
+echo "▶  GameManager smoke tests"
+echo "   GM_BASE : ${GM_BASE:-http://localhost:5001}"
+echo "   Python  : $PYTHON"
+echo ""
+
+cd "$REPO_ROOT"
+
+exec "$PYTHON" -m pytest \
+  tests/test_lonewolf_combat.py \
+  tests/test_dnd5_combat.py \
+  --tb=short \
+  -v \
+  "$@"

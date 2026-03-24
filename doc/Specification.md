@@ -76,47 +76,41 @@ UI
 
 ### 4.0 Short ID Scheme
 
-Every GM-owned and RE-owned resource carries two identifiers:
+Every GM-owned and RE-owned resource is identified by a single **short ID (`sid`)**: 8 characters from `[A-Za-z0-9]` (62⁸ ≈ 218 trillion combinations).
 
-| Field | Format | Purpose |
-|---|---|---|
-| `uuid` | RFC 4122 UUID | Canonical internal key, idempotency key, storage FK |
-| `sid` | 8 chars from `[A-Za-z0-9]` | URL-safe short ID — used in all URL path segments |
+| Property | Detail |
+|---|---|
+| Format | 8 chars `[A-Za-z0-9]` |
+| Generation | CSPRNG at resource creation; base-62 encoded |
+| Scope | Unique per resource type (sessions, entities, maps, groups, trackers, decks each namespaced separately) |
+| Immutability | Never changes after creation |
 
-**Short ID properties:**
-- Generated at resource creation alongside the UUID (CSPRNG-derived, base-62 encoded).
-- Globally unique **per resource type** (sessions, entities, maps, groups, trackers, decks each have their own namespace).
-- Immutable after creation.
-- 62⁸ ≈ 218 trillion — collision probability negligible for expected dataset sizes.
+**There is no UUID in the public API.** Internal storage may use any key format; that is an implementation detail invisible to callers. All API paths, request bodies, and response bodies use `sid` exclusively.
 
-**URL routing:** All GM and RE URL path segments use `{sid}` exclusively. UUIDs are **never valid in a URL path**. A request with a UUID in a path segment returns `400 Bad Request`. UUIDs exist only as internal storage keys and idempotency keys in request/response bodies.
+**URL routing:** All path segments use `{sid}`. A request with a UUID-formatted value in a path returns `400 Bad Request`.
 
-**Example:**
 ```
-✓  GET /v1/sessions/aB3kR7mX/flow          (sid — correct)
-✗  GET /v1/sessions/550e8400-e29b-41d4-a716-446655440000/flow   (uuid in path — 400)
+✓  GET /v1/sessions/aB3kR7mX/flow
+✗  GET /v1/sessions/550e8400-e29b-41d4-a716-446655440000/flow  → 400
 ```
 
-The short ID is included in every resource creation response alongside the UUID so clients always have it available immediately.
+**Action idempotency:** The action envelope carries a separate `idempotency_key` field (any unique string — typically a freshly generated base-62 token) that is not a resource SID. See §6.1.
 
 ---
 
 ### 4.1 CampaignRuntimeState
 
-Manager-layer state. Does not replicate RE world state — references RE resource SIDs (and UUIDs) instead.
+Manager-layer state. Does not replicate RE world state — references RE resource SIDs only.
 
 ```
 CampaignRuntimeState
-  session_id              uuid              RE session UUID (internal key)
-  session_sid             sid               8-char short ID for URL paths
-  campaign_id             uuid
+  session_sid             sid               RE session short ID (shared key)
   campaign_sid            sid
   flow_phase              FlowPhase
-  active_scene_id         uuid | null       UUID of RE scene resource
-  active_scene_sid        sid  | null       Short ID of RE scene resource
-  plot_map_ids            uuid[]            RE temporal map UUIDs tracking plot threads
-  player_actor_ids        uuid[]            RE entity UUIDs of player characters
-  current_actor_id        uuid | null       RE entity UUID of whose turn it is
+  active_scene_sid        sid  | null       Short ID of active RE scene resource
+  plot_map_sids           sid[]             RE temporal map SIDs tracking plot threads
+  player_actor_sids       sid[]             RE entity SIDs of player characters
+  current_actor_sid       sid  | null       RE entity SID of whose turn it is
   pending_wizard          WizardSessionState | null
   scheduled_tasks         SystemTask[]
   manager_flags           {}                GM-layer key-value bag (not world flags)
@@ -131,18 +125,16 @@ References RE resources; does not embed their content.
 
 ```
 SceneDefinition
-  scene_id                uuid
   scene_sid               sid
   mode                    "battle_map" | "theater_of_mind"
   presentation            "battle_map" | "travel" | "social" | "shop" | "info"
-  participants            uuid[]         RE entity UUIDs
+  participant_sids        sid[]          RE entity SIDs
   resources
-    spatial_map_id        uuid | null    RE spatial map UUID (battle_map mode)
-    spatial_map_sid       sid  | null    RE spatial map short ID
-    temporal_map_ids      uuid[]         RE temporal map UUIDs (plot threads for this scene)
-    group_ids             uuid[]         RE group UUIDs
-    tracker_ids           uuid[]         RE tracker UUIDs
-    deck_ids              uuid[]         RE deck UUIDs
+    spatial_map_sid       sid  | null    RE spatial map SID (battle_map mode)
+    temporal_map_sids     sid[]          RE temporal map SIDs (plot threads for this scene)
+    group_sids            sid[]          RE group SIDs
+    tracker_sids          sid[]          RE tracker SIDs
+    deck_sids             sid[]          RE deck SIDs
   entry_conditions        condition[]
   exit_conditions         condition[]
 ```
@@ -167,7 +159,6 @@ campaign_end
 
 ```
 WizardSessionState
-  wizard_id               uuid
   wizard_sid              sid
   wizard_type             "character_creation" | "level_up" | ...
   step                    integer
@@ -180,7 +171,6 @@ WizardSessionState
 
 ```
 SystemTask
-  task_id                 uuid
   task_sid                sid
   task_type               "draw_deck"
                         | "weather_tick"
@@ -230,26 +220,26 @@ RE does not have a single encounter object. Encounter state is distributed:
 | Encounter active | `clock.round > 0` |
 | Current initiative position | `clock.initiative_step` |
 | Combat sides / factions | `encounter_group`-typed groups; each member carries `order_value` and `has_acted` |
-| Active map | `scene.mode = "battle_map"`, `scene` references spatial map UUID |
+| Active map | `scene.mode = "battle_map"`, `scene` references spatial map SID |
 | End of encounter | GM sets `clock.round = 0` and `clock.initiative_step = 0` via `PUT /world/clock` |
 
 GameManager reads the RE clock and encounter groups to determine current actor and turn order; it updates them by submitting actions and calling `POST /turn/end`.
 
 ### 5.3 Entity Location → Map Presence
 
-Entity position is **not** an entity block. It is held in the map's presence index. To place, move, or remove an entity: `PUT /world/maps/{map_id}/presence/{entity_id}`. Location shape varies by map type:
+Entity position is **not** an entity block. It is held in the map's presence index. To place, move, or remove an entity: `PUT /world/maps/{map_sid}/presence/{entity_sid}`. Location shape varies by map type:
 
 | Map level | Location |
 |---|---|
 | `spatial tile` | `{ "x": 3, "y": 7 }` |
-| `spatial graph` | `{ "node_id": "<uuid>" }` |
-| `spatial vector` | `{ "node_id": "<uuid>", "offset": { "x": 0.5, "y": 1.2 } }` |
-| `temporal graph/vector` | `{ "node_id": "<uuid>", "state": "active|completed|pending" }` |
+| `spatial graph` | `{ "node_sid": "<sid>" }` |
+| `spatial vector` | `{ "node_sid": "<sid>", "offset": { "x": 0.5, "y": 1.2 } }` |
+| `temporal graph/vector` | `{ "node_sid": "<sid>", "state": "active|completed|pending" }` |
 | `temporal sequence` | `{ "sequence_index": 4, "state": "active|completed|pending" }` |
 
 ### 5.4 Deck Draws → RE System Actions
 
-GameManager does not draw cards directly and apply effects. It calls `POST /world/decks/{deck_id}/draw`, which:
+GameManager does not draw cards directly and apply effects. It calls `POST /world/decks/{deck_sid}/draw`, which:
 1. Advances the deck to the next undrawn card
 2. Submits the card payload as a system action (actor = system entity, source_type = `system`)
 3. Runs the payload through the full RE action pipeline
@@ -275,7 +265,7 @@ GameManager interacts with doors through the RE action pipeline only — it neve
 
 **State model:** `open` (passable) → `closed` (blocked) → `locked` (blocked) → `smashed` (passable, terminal until repaired).
 
-The map edge between two nodes carries only a `constraint.door_entity_uuid` reference; the RE validation layer resolves passability from `door_block.state` at runtime. GameManager does not need to track door state separately — it reads the entity block on demand.
+The map edge between two nodes carries only a `constraint.door_entity_sid` reference; the RE validation layer resolves passability from `door_block.state` at runtime. GameManager does not need to track door state separately — it reads the entity block on demand.
 
 **Scene assembly:** When `BattleMapOrchestrator` sets up a map, it creates door entities (`POST /world/entities`) and references them from map edge constraints. Key entities may be placed in NPC inventory blocks or container blocks as part of scene setup.
 
@@ -291,21 +281,21 @@ Portal state model:
 | `inactive` | no |
 | `locked` | no — requires unlock action |
 
-The single action verb is `use_portal` (`actor_id`, `target_id` = portal entity UUID).
+The single action verb is `use_portal` (`actor_sid`, `target_sid` = portal entity SID).
 
 **Transition contract (RE pipeline):**
 1. Validates portal reachable and `active`; applies encounter movement rules if `clock.round > 0`.
-2. Atomically removes actor presence from source map/node; adds presence at `destination_map_uuid` / `destination_node_uuid`.
-3. Emits `portal_transition_completed` (actor_id, from_map_uuid, from_node_uuid, to_map_uuid, to_node_uuid).
+2. Atomically removes actor presence from source map/node; adds presence at `destination_map_sid` / `destination_node_sid`.
+3. Emits `portal_transition_completed` (actor_sid, from_map_sid, from_node_sid, to_map_sid, to_node_sid).
 4. If destination map ≠ active scene map: also emits `scene_transition_requested`.
 
 **GameManager responsibility:** `BattleMapOrchestrator` (and `TravelOrchestrator` for overworld-to-dungeon transitions) monitors `emitted_events` from each action result for `scene_transition_requested`. On receipt, the orchestrator triggers a `scene_transition` phase and loads the destination map as the new scene.
 
-Portal entities are created during scene assembly. Bidirectional pairs must be created together: each portal's `portal_block.return_portal_uuid` references its companion. One-way portals carry `return_portal_uuid: null`.
+Portal entities are created during scene assembly. Bidirectional pairs must be created together: each portal's `portal_block.return_portal_sid` references its companion. One-way portals carry `return_portal_sid: null`.
 
 ### 5.8 Containers → RE Item Entities
 
-Containers are `item` entities whose `container_block` holds an ordered list of item entity UUIDs. They share the same entity endpoints as all other items.
+Containers are `item` entities whose `container_block` holds an ordered list of item entity SIDs. They share the same entity endpoints as all other items.
 
 Container state:
 
@@ -329,7 +319,7 @@ The pipeline validates accessibility, key match (if locked), capacity limits, an
 
 **Map presence rule:** Only the outermost entity in a containment chain has map presence. Items inside a container or inside a character's inventory have no independent presence. When a container moves, all its contents move with it automatically.
 
-**Scene assembly:** Containers and their initial contents are seeded during scene setup by creating entities and calling `put_in_container` system actions (or by using the deck `container_spawn` payload type via `POST /world/decks/{deck_id}/draw`).
+**Scene assembly:** Containers and their initial contents are seeded during scene setup by creating entities and calling `put_in_container` system actions (or by using the deck `container_spawn` payload type via `POST /world/decks/{deck_sid}/draw`).
 
 ### 5.9 Visibility and Fog of War → RE Explored Index
 
@@ -337,18 +327,18 @@ The RE distinguishes three visibility concepts, each with different authority:
 
 | Concept | Authority | RE endpoint |
 |---|---|---|
-| Explored state (fog of war) | **Canonical world resource** — stored, journaled | `GET/PUT/DELETE /world/maps/{map_id}/explored/{faction_id}` |
+| Explored state (fog of war) | **Canonical world resource** — stored, journaled | `GET/PUT/DELETE /world/maps/{map_sid}/explored/{faction_sid}` |
 | Line of sight | Derived — pure function of positions + terrain | Computed on affordance query; never stored |
 | Current visibility | Derived — explored + LoS | Computed on demand; never stored |
 
 **Explored state** is the only visibility concept GameManager needs to reason about. It is updated automatically by the RE when any faction member enters a new node or tile (journaled mutation). GameManager reads it for:
 - Rendering the fog layer in `UIFlowSnapshot.scene_summary`
 - Filtering affordance suggestions to visible targets
-- Scene setup: pre-revealing areas with `PUT /world/maps/{map_id}/explored/{faction_id}` (scripted revelation)
+- Scene setup: pre-revealing areas with `PUT /world/maps/{map_sid}/explored/{faction_sid}` (scripted revelation)
 
 **GameManager does not implement its own fog cache.** The explored index is authoritative RE world state. On replay, the RE journal reconstructs it identically.
 
-**GM-initiated revelation:** For scripted scenes (cutscenes, map unlocks, teleport-to-known-location), the `BattleMapOrchestrator` may call `PUT /world/maps/{map_id}/explored/{faction_id}` directly during scene setup. This is treated as a configuration operation, identical in kind to placing entities or setting map presence (see §6.3 Invariants).
+**GM-initiated revelation:** For scripted scenes (cutscenes, map unlocks, teleport-to-known-location), the `BattleMapOrchestrator` may call `PUT /world/maps/{map_sid}/explored/{faction_sid}` directly during scene setup. This is treated as a configuration operation, identical in kind to placing entities or setting map presence (see §6.3 Invariants).
 
 ---
 
@@ -358,19 +348,17 @@ The RE distinguishes three visibility concepts, each with different authority:
 
 ```json
 {
-  "uuid":         "<uuid>",          // idempotency key; always provide to support retries
-  "actor_id":     "<entity_uuid>",   // RE entity UUID; system entity UUID for system actions
-  "actor_sid":    "<entity_sid>",    // short ID — used when constructing the RE URL path
-  "action_type":  "<canonical_verb>",
-  "source_type":  "player|gm|llm|system",
-  "target_id":    "<entity_uuid>",   // optional
-  "target_sid":   "<entity_sid>",    // optional
-  "instrument":   "<entity_uuid>",   // optional
-  "X-Correlation-Id": "<uuid>"       // passed as request header for tracing
+  "idempotency_key": "<token>",      // unique per submission — any string; typically 8-char base-62
+  "actor_sid":       "<entity_sid>", // RE entity SID; system entity SID for system actions
+  "action_type":     "<canonical_verb>",
+  "source_type":     "player|gm|llm|system",
+  "target_sid":      "<entity_sid>", // optional
+  "instrument_sid":  "<entity_sid>", // optional
+  "X-Correlation-Id": "<token>"      // passed as request header for tracing
 }
 ```
 
-> `uuid` on the envelope is RE's idempotency key. `*_sid` fields are short IDs used in RE URL path segments. The tracing correlation ID is a separate header concern, not part of the action payload.
+> `idempotency_key` is a per-submission token (not a resource SID) — it allows RE to deduplicate retried requests. The tracing correlation ID is a separate header concern, not part of the action payload.
 
 ### 6.2 Action Result (RE → GM)
 
@@ -382,7 +370,7 @@ The RE distinguishes three visibility concepts, each with different authority:
                          | "rejected_duplicate"
                          | "partial_requires_completion"
                          | "failed_resolution",
-  "journal_entry_id":      "<uuid>",       // null on rejection before journal write
+  "journal_entry_sid":     "<sid>",        // null on rejection before journal write
   "validation": {
     "valid":               true | false,
     "reasons":             []
@@ -446,7 +434,7 @@ GameManager uses `emitted_events` to detect scene exit conditions, level-up trig
 
 ### 7.3 Conflict Policy
 
-Actions arriving during `system_step`, `resolving_action`, or `wizard_active` are queued and submitted once the phase returns to `awaiting_player_action`. Duplicate action UUIDs are silently deduplicated by RE; GameManager does not need to deduplicate them itself.
+Actions arriving during `system_step`, `resolving_action`, or `wizard_active` are queued and submitted once the phase returns to `awaiting_player_action`. Duplicate `idempotency_key` values are silently deduplicated by RE; GameManager does not need to deduplicate them itself.
 
 ### 7.4 Replay Safety
 
@@ -467,7 +455,7 @@ Scene orchestrators assemble RE resources during `scene_setup` phase, then inter
 - Create encounter group per side: `POST /world/groups` (`group_type: encounter_group`)
 - Add members to groups with `order_value`: `POST /world/groups/{id}/members`
 - Initialize clock for encounter: `PUT /world/clock` (`round: 1, initiative_step: 1`)
-- Pre-reveal scripted areas (if any): `PUT /world/maps/{map_id}/explored/{faction_id}`
+- Pre-reveal scripted areas (if any): `PUT /world/maps/{map_sid}/explored/{faction_sid}`
 - Seed container loot: submit `put_in_container` system actions, or draw from a deck carrying `container_spawn` payloads
 - Set scene mode: `PUT /scene` (`mode: battle_map`, resource references)
 
@@ -482,7 +470,7 @@ Scene orchestrators assemble RE resources during `scene_setup` phase, then inter
 
 **Portal transition handling:**
 When `scene_transition_requested` is detected in `emitted_events`:
-1. The orchestrator records the destination map UUID and node UUID from the event payload.
+1. The orchestrator records the destination map SID and node SID from the event payload.
 2. `FlowEngine` transitions to `scene_transition` phase.
 3. `BattleMapOrchestrator` (or `TravelOrchestrator` for overworld links) is instantiated for the destination map.
 4. Scene setup proceeds for the destination; the actor's presence on the destination map was already written by the RE pipeline.
@@ -578,18 +566,18 @@ On wizard cancel:
 
 ## 10. SystemActionScheduler
 
-Maintains a queue of `SystemTask` entries. After every `resolving_action` and at each travel segment, checks for due tasks and fires them as RE system actions (actor = system entity UUID, `source_type: system`).
+Maintains a queue of `SystemTask` entries. After every `resolving_action` and at each travel segment, checks for due tasks and fires them as RE system actions (actor = system entity SID, `source_type: system`).
 
 **Task types and RE mapping:**
 
 | Task type | RE call |
 |---|---|
-| `draw_deck` | `POST /world/decks/{deck_id}/draw` |
-| `weather_tick` | `POST /world/decks/{weather_deck_id}/draw` |
+| `draw_deck` | `POST /world/decks/{deck_sid}/draw` |
+| `weather_tick` | `POST /world/decks/{weather_deck_sid}/draw` |
 | `random_encounter_check` | `POST /actions` (system action, custom action_type) |
 | `end_turn_effects` | `POST /turn/end` (RE handles condition ticks, effect expiry) |
 
-Tasks are logged in the manager journal. On replay, tasks already fired (identified by `task_id`) are skipped.
+Tasks are logged in the manager journal. On replay, tasks already fired (identified by `task_sid`) are skipped.
 
 ---
 
@@ -599,19 +587,18 @@ GameManager exposes a flow-oriented API layered above the RE. Some endpoints are
 
 ### 11.0 Short ID in URL Paths
 
-All path parameters named `{sid}` are **8-character short IDs** (`[A-Za-z0-9]`). Every `POST` that creates a resource returns both `uuid` and `sid` in the response body. **UUIDs are never accepted in URL path segments** — passing a UUID in a path returns `400 Bad Request`.
+All path parameters named `{sid}` are **8-character short IDs** (`[A-Za-z0-9]`). Every `POST` that creates a resource returns a `sid` in the response body — no UUID is exposed. A non-sid value in a path segment returns `400 Bad Request`.
 
 ```
-POST   /v1/sessions                   →  { "uuid": "550e8400-...", "sid": "aB3kR7mX" }
-GET    /v1/sessions/aB3kR7mX/flow     →  200 OK
-GET    /v1/sessions/550e8400-.../flow →  400 Bad Request  (UUID in path — invalid)
+POST   /v1/sessions              →  { "sid": "aB3kR7mX", "flow_phase": "bootstrap" }
+GET    /v1/sessions/aB3kR7mX/flow  →  200 OK
 ```
 
 ### 11.1 Session and Campaign
 
 ```
 POST   /v1/sessions                            Create GM session + RE session
-                                               Returns: { uuid, sid, flow_phase }
+                                               Returns: { sid, flow_phase }
 POST   /v1/sessions/{sid}/campaign             Load campaign: seed RE world state, init GM runtime
 GET    /v1/sessions/{sid}/campaign             Campaign metadata and plot progress
 ```
@@ -713,7 +700,7 @@ Every UI request carries `X-Correlation-Id` (generated at gateway if absent). It
 | `scene_setup_complete` | `scene_id, elapsed_ms, session_id` |
 | `wizard_step` | `wizard_type, step, status, session_id` |
 | `system_task_fired` | `task_type, task_id, session_id` |
-| `action_mediated` | `action_type, actor_id, re_status, correlation_id` |
+| `action_mediated` | `action_type, actor_sid, re_status, correlation_id` |
 
 ### 13.3 Metrics
 
@@ -752,7 +739,7 @@ Every UI request carries `X-Correlation-Id` (generated at gateway if absent). It
 ### 14.3 Replay Tests
 
 - GM phase recovery from manager journal after RE journal replay
-- Duplicate action UUID deduplication by RE; GM does not double-apply
+- Duplicate `idempotency_key` deduplication by RE; GM does not double-apply
 - Temporal map presence state correctly reconstructed from RE replay
 
 ### 14.4 UI Contract Tests
@@ -772,7 +759,7 @@ Every UI request carries `X-Correlation-Id` (generated at gateway if absent). It
 - **Resumable at any point.** Sessions survive closure mid-wizard, mid-combat, mid-travel.
 - **Single active scene.** Exactly one scene or flow active at a time.
 - **Replay safe.** Every GM phase decision is logged so the phase machine can be reconstructed without re-running effects.
-- **Idempotency.** All RE action submissions carry stable `uuid` values to survive retries.
+- **Idempotency.** All RE action submissions carry a stable `idempotency_key` to survive retries.
 
 ---
 

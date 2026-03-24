@@ -212,8 +212,8 @@ FlowEngine processes any resulting emitted_events (same as normal action path)
 | GM state | Stored in |
 |---|---|
 | `flow_phase` | `CampaignRuntimeState` |
-| `active_scene_id` (RE UUID reference only) | `CampaignRuntimeState` |
-| `plot_map_ids` (RE UUID references only) | `CampaignRuntimeState` |
+| `active_scene_sid` (RE SID reference) | `CampaignRuntimeState` |
+| `plot_map_sids` (RE SID references) | `CampaignRuntimeState` |
 | `pending_wizard` and step inputs | `WizardSessionState` (embedded in `CampaignRuntimeState`) |
 | `scheduled_tasks` and fired-task history | `CampaignRuntimeState` |
 | `manager_flags` (flow-decision bag) | `CampaignRuntimeState` |

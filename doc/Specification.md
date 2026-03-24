@@ -104,13 +104,13 @@ Manager-layer state. Does not replicate RE world state — references RE resourc
 
 ```
 CampaignRuntimeState
-  session_sid             sid               RE session short ID (shared key)
-  campaign_sid            sid
+  session_id             sid               RE session short ID (shared key)
+  campaign_id            sid
   flow_phase              FlowPhase
-  active_scene_sid        sid  | null       Short ID of active RE scene resource
-  plot_map_sids           sid[]             RE temporal map SIDs tracking plot threads
-  player_actor_sids       sid[]             RE entity SIDs of player characters
-  current_actor_sid       sid  | null       RE entity SID of whose turn it is
+  active_scene_id        sid  | null       Short ID of active RE scene resource
+  plot_map_ids           sid[]             RE temporal map SIDs tracking plot threads
+  player_actor_ids       sid[]             RE entity SIDs of player characters
+  current_actor_id       sid  | null       RE entity SID of whose turn it is
   pending_wizard          WizardSessionState | null
   scheduled_tasks         SystemTask[]
   manager_flags           {}                GM-layer key-value bag (not world flags)
@@ -125,16 +125,16 @@ References RE resources; does not embed their content.
 
 ```
 SceneDefinition
-  scene_sid               sid
+  scene_id               sid
   mode                    "battle_map" | "theater_of_mind"
   presentation            "battle_map" | "travel" | "social" | "shop" | "info"
-  participant_sids        sid[]          RE entity SIDs
+  participant_ids        sid[]          RE entity SIDs
   resources
-    spatial_map_sid       sid  | null    RE spatial map SID (battle_map mode)
-    temporal_map_sids     sid[]          RE temporal map SIDs (plot threads for this scene)
-    group_sids            sid[]          RE group SIDs
-    tracker_sids          sid[]          RE tracker SIDs
-    deck_sids             sid[]          RE deck SIDs
+    spatial_map_id       sid  | null    RE spatial map SID (battle_map mode)
+    temporal_map_ids     sid[]          RE temporal map SIDs (plot threads for this scene)
+    group_ids            sid[]          RE group SIDs
+    tracker_ids          sid[]          RE tracker SIDs
+    deck_ids             sid[]          RE deck SIDs
   entry_conditions        condition[]
   exit_conditions         condition[]
 ```
@@ -159,7 +159,7 @@ campaign_end
 
 ```
 WizardSessionState
-  wizard_sid              sid
+  wizard_id              sid
   wizard_type             "character_creation" | "level_up" | ...
   step                    integer
   inputs                  {}             accumulated answers
@@ -171,7 +171,7 @@ WizardSessionState
 
 ```
 SystemTask
-  task_sid                sid
+  task_id                sid
   task_type               "draw_deck"
                         | "weather_tick"
                         | "random_encounter_check"
@@ -227,19 +227,19 @@ GameManager reads the RE clock and encounter groups to determine current actor a
 
 ### 5.3 Entity Location → Map Presence
 
-Entity position is **not** an entity block. It is held in the map's presence index. To place, move, or remove an entity: `PUT /world/maps/{map_sid}/presence/{entity_sid}`. Location shape varies by map type:
+Entity position is **not** an entity block. It is held in the map's presence index. To place, move, or remove an entity: `PUT /world/maps/{map_id}/presence/{entity_id}`. Location shape varies by map type:
 
 | Map level | Location |
 |---|---|
 | `spatial tile` | `{ "x": 3, "y": 7 }` |
-| `spatial graph` | `{ "node_sid": "<sid>" }` |
-| `spatial vector` | `{ "node_sid": "<sid>", "offset": { "x": 0.5, "y": 1.2 } }` |
-| `temporal graph/vector` | `{ "node_sid": "<sid>", "state": "active|completed|pending" }` |
+| `spatial graph` | `{ "node_id": "<sid>" }` |
+| `spatial vector` | `{ "node_id": "<sid>", "offset": { "x": 0.5, "y": 1.2 } }` |
+| `temporal graph/vector` | `{ "node_id": "<sid>", "state": "active|completed|pending" }` |
 | `temporal sequence` | `{ "sequence_index": 4, "state": "active|completed|pending" }` |
 
 ### 5.4 Deck Draws → RE System Actions
 
-GameManager does not draw cards directly and apply effects. It calls `POST /world/decks/{deck_sid}/draw`, which:
+GameManager does not draw cards directly and apply effects. It calls `POST /world/decks/{deck_id}/draw`, which:
 1. Advances the deck to the next undrawn card
 2. Submits the card payload as a system action (actor = system entity, source_type = `system`)
 3. Runs the payload through the full RE action pipeline
@@ -265,7 +265,7 @@ GameManager interacts with doors through the RE action pipeline only — it neve
 
 **State model:** `open` (passable) → `closed` (blocked) → `locked` (blocked) → `smashed` (passable, terminal until repaired).
 
-The map edge between two nodes carries only a `constraint.door_entity_sid` reference; the RE validation layer resolves passability from `door_block.state` at runtime. GameManager does not need to track door state separately — it reads the entity block on demand.
+The map edge between two nodes carries only a `constraint.door_entity_id` reference; the RE validation layer resolves passability from `door_block.state` at runtime. GameManager does not need to track door state separately — it reads the entity block on demand.
 
 **Scene assembly:** When `BattleMapOrchestrator` sets up a map, it creates door entities (`POST /world/entities`) and references them from map edge constraints. Key entities may be placed in NPC inventory blocks or container blocks as part of scene setup.
 
@@ -281,17 +281,17 @@ Portal state model:
 | `inactive` | no |
 | `locked` | no — requires unlock action |
 
-The single action verb is `use_portal` (`actor_sid`, `target_sid` = portal entity SID).
+The single action verb is `use_portal` (`actor_id`, `target_id` = portal entity SID).
 
 **Transition contract (RE pipeline):**
 1. Validates portal reachable and `active`; applies encounter movement rules if `clock.round > 0`.
-2. Atomically removes actor presence from source map/node; adds presence at `destination_map_sid` / `destination_node_sid`.
-3. Emits `portal_transition_completed` (actor_sid, from_map_sid, from_node_sid, to_map_sid, to_node_sid).
+2. Atomically removes actor presence from source map/node; adds presence at `destination_map_id` / `destination_node_id`.
+3. Emits `portal_transition_completed` (actor_id, from_map_id, from_node_id, to_map_id, to_node_id).
 4. If destination map ≠ active scene map: also emits `scene_transition_requested`.
 
 **GameManager responsibility:** `BattleMapOrchestrator` (and `TravelOrchestrator` for overworld-to-dungeon transitions) monitors `emitted_events` from each action result for `scene_transition_requested`. On receipt, the orchestrator triggers a `scene_transition` phase and loads the destination map as the new scene.
 
-Portal entities are created during scene assembly. Bidirectional pairs must be created together: each portal's `portal_block.return_portal_sid` references its companion. One-way portals carry `return_portal_sid: null`.
+Portal entities are created during scene assembly. Bidirectional pairs must be created together: each portal's `portal_block.return_portal_id` references its companion. One-way portals carry `return_portal_id: null`.
 
 ### 5.8 Containers → RE Item Entities
 
@@ -319,7 +319,7 @@ The pipeline validates accessibility, key match (if locked), capacity limits, an
 
 **Map presence rule:** Only the outermost entity in a containment chain has map presence. Items inside a container or inside a character's inventory have no independent presence. When a container moves, all its contents move with it automatically.
 
-**Scene assembly:** Containers and their initial contents are seeded during scene setup by creating entities and calling `put_in_container` system actions (or by using the deck `container_spawn` payload type via `POST /world/decks/{deck_sid}/draw`).
+**Scene assembly:** Containers and their initial contents are seeded during scene setup by creating entities and calling `put_in_container` system actions (or by using the deck `container_spawn` payload type via `POST /world/decks/{deck_id}/draw`).
 
 ### 5.9 Visibility and Fog of War → RE Explored Index
 
@@ -327,18 +327,18 @@ The RE distinguishes three visibility concepts, each with different authority:
 
 | Concept | Authority | RE endpoint |
 |---|---|---|
-| Explored state (fog of war) | **Canonical world resource** — stored, journaled | `GET/PUT/DELETE /world/maps/{map_sid}/explored/{faction_sid}` |
+| Explored state (fog of war) | **Canonical world resource** — stored, journaled | `GET/PUT/DELETE /world/maps/{map_id}/explored/{faction_id}` |
 | Line of sight | Derived — pure function of positions + terrain | Computed on affordance query; never stored |
 | Current visibility | Derived — explored + LoS | Computed on demand; never stored |
 
 **Explored state** is the only visibility concept GameManager needs to reason about. It is updated automatically by the RE when any faction member enters a new node or tile (journaled mutation). GameManager reads it for:
 - Rendering the fog layer in `UIFlowSnapshot.scene_summary`
 - Filtering affordance suggestions to visible targets
-- Scene setup: pre-revealing areas with `PUT /world/maps/{map_sid}/explored/{faction_sid}` (scripted revelation)
+- Scene setup: pre-revealing areas with `PUT /world/maps/{map_id}/explored/{faction_id}` (scripted revelation)
 
 **GameManager does not implement its own fog cache.** The explored index is authoritative RE world state. On replay, the RE journal reconstructs it identically.
 
-**GM-initiated revelation:** For scripted scenes (cutscenes, map unlocks, teleport-to-known-location), the `BattleMapOrchestrator` may call `PUT /world/maps/{map_sid}/explored/{faction_sid}` directly during scene setup. This is treated as a configuration operation, identical in kind to placing entities or setting map presence (see §6.3 Invariants).
+**GM-initiated revelation:** For scripted scenes (cutscenes, map unlocks, teleport-to-known-location), the `BattleMapOrchestrator` may call `PUT /world/maps/{map_id}/explored/{faction_id}` directly during scene setup. This is treated as a configuration operation, identical in kind to placing entities or setting map presence (see §6.3 Invariants).
 
 ---
 
@@ -349,11 +349,11 @@ The RE distinguishes three visibility concepts, each with different authority:
 ```json
 {
   "idempotency_key": "<token>",      // unique per submission — any string; typically 8-char base-62
-  "actor_sid":       "<entity_sid>", // RE entity SID; system entity SID for system actions
+  "actor_id":       "<entity_id>", // RE entity SID; system entity SID for system actions
   "action_type":     "<canonical_verb>",
   "source_type":     "player|gm|llm|system",
-  "target_sid":      "<entity_sid>", // optional
-  "instrument_sid":  "<entity_sid>", // optional
+  "target_id":      "<entity_id>", // optional
+  "instrument_id":  "<entity_id>", // optional
   "X-Correlation-Id": "<token>"      // passed as request header for tracing
 }
 ```
@@ -370,7 +370,7 @@ The RE distinguishes three visibility concepts, each with different authority:
                          | "rejected_duplicate"
                          | "partial_requires_completion"
                          | "failed_resolution",
-  "journal_entry_sid":     "<sid>",        // null on rejection before journal write
+  "journal_entry_id":     "<sid>",        // null on rejection before journal write
   "validation": {
     "valid":               true | false,
     "reasons":             []
@@ -455,7 +455,7 @@ Scene orchestrators assemble RE resources during `scene_setup` phase, then inter
 - Create encounter group per side: `POST /world/groups` (`group_type: encounter_group`)
 - Add members to groups with `order_value`: `POST /world/groups/{id}/members`
 - Initialize clock for encounter: `PUT /world/clock` (`round: 1, initiative_step: 1`)
-- Pre-reveal scripted areas (if any): `PUT /world/maps/{map_sid}/explored/{faction_sid}`
+- Pre-reveal scripted areas (if any): `PUT /world/maps/{map_id}/explored/{faction_id}`
 - Seed container loot: submit `put_in_container` system actions, or draw from a deck carrying `container_spawn` payloads
 - Set scene mode: `PUT /scene` (`mode: battle_map`, resource references)
 
@@ -572,12 +572,12 @@ Maintains a queue of `SystemTask` entries. After every `resolving_action` and at
 
 | Task type | RE call |
 |---|---|
-| `draw_deck` | `POST /world/decks/{deck_sid}/draw` |
-| `weather_tick` | `POST /world/decks/{weather_deck_sid}/draw` |
+| `draw_deck` | `POST /world/decks/{deck_id}/draw` |
+| `weather_tick` | `POST /world/decks/{weather_deck_id}/draw` |
 | `random_encounter_check` | `POST /actions` (system action, custom action_type) |
 | `end_turn_effects` | `POST /turn/end` (RE handles condition ticks, effect expiry) |
 
-Tasks are logged in the manager journal. On replay, tasks already fired (identified by `task_sid`) are skipped.
+Tasks are logged in the manager journal. On replay, tasks already fired (identified by `task_id`) are skipped.
 
 ---
 
@@ -700,7 +700,7 @@ Every UI request carries `X-Correlation-Id` (generated at gateway if absent). It
 | `scene_setup_complete` | `scene_id, elapsed_ms, session_id` |
 | `wizard_step` | `wizard_type, step, status, session_id` |
 | `system_task_fired` | `task_type, task_id, session_id` |
-| `action_mediated` | `action_type, actor_sid, re_status, correlation_id` |
+| `action_mediated` | `action_type, actor_id, re_status, correlation_id` |
 
 ### 13.3 Metrics
 
